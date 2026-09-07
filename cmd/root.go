@@ -5,9 +5,12 @@ import (
 	"fmt"
 
 	"github.com/kwaimind/winding/internal/config"
+	"github.com/kwaimind/winding/internal/gitops"
 	"github.com/kwaimind/winding/internal/yarnbump"
 	"github.com/spf13/cobra"
 )
+
+var gitFlag bool
 
 var rootCmd = &cobra.Command{
 	Use:   "winding",
@@ -20,6 +23,10 @@ Config file: %s (edit by hand anytime, or use the subcommands below)`, mustConfi
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runAll()
 	},
+}
+
+func init() {
+	rootCmd.Flags().BoolVar(&gitFlag, "git", false, "commit each bumped repo's changes to a new branch")
 }
 
 // Execute runs the root command, exiting non-zero on failure.
@@ -52,6 +59,17 @@ func runAll() error {
 		result := yarnbump.Bump(repo)
 		if result.OK {
 			fmt.Printf("    ok: %s\n", result.Message)
+			if gitFlag {
+				commitResult, err := gitops.CommitChanges(repo)
+				switch {
+				case err != nil:
+					fmt.Printf("    git: FAILED: %v\n", err)
+				case commitResult.Committed:
+					fmt.Printf("    git: committed to branch %s\n", commitResult.Branch)
+				default:
+					fmt.Println("    git: nothing to commit")
+				}
+			}
 		} else {
 			failures++
 			fmt.Printf("    FAILED: %s\n", result.Message)
