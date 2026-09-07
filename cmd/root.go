@@ -6,6 +6,7 @@ import (
 
 	"github.com/kwaimind/winding/internal/config"
 	"github.com/kwaimind/winding/internal/gitops"
+	"github.com/kwaimind/winding/internal/spinner"
 	"github.com/kwaimind/winding/internal/yarnbump"
 	"github.com/spf13/cobra"
 )
@@ -56,11 +57,15 @@ func runAll() error {
 	failures := 0
 	for _, repo := range repos {
 		fmt.Printf("==> %s\n", repo)
+		sp := spinner.Start("bumping yarn and installing...")
 		result := yarnbump.Bump(repo)
+		sp.Stop()
 		if result.OK {
 			fmt.Printf("    ok: %s\n", result.Message)
 			if gitFlag {
+				gitSp := spinner.Start("committing changes...")
 				commitResult, err := gitops.CommitChanges(repo)
+				gitSp.Stop()
 				switch {
 				case err != nil:
 					fmt.Printf("    git: FAILED: %v\n", err)
