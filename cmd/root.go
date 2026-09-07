@@ -2,7 +2,9 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"sync"
 
 	"github.com/kwaimind/winding/internal/config"
 	"github.com/kwaimind/winding/internal/gitops"
@@ -11,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var gitFlag bool
+var (
+	gitFlag      bool
+	parallelFlag int
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "winding",
@@ -28,6 +33,7 @@ Config file: %s (edit by hand anytime, or use the subcommands below)`, mustConfi
 
 func init() {
 	rootCmd.Flags().BoolVar(&gitFlag, "git", false, "commit each bumped repo's changes to a new branch")
+	rootCmd.Flags().IntVarP(&parallelFlag, "parallel", "j", 4, "number of repos to bump concurrently")
 }
 
 // Execute runs the root command, exiting non-zero on failure.
@@ -54,30 +60,42 @@ func runAll() error {
 		return nil
 	}
 
+	concurrency := parallelFlag
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(repos) {
+		concurrency = len(repos)
+	}
+
+	outputs := make([]string, len(repos))
+	failed := make([]bool, len(repos))
+
+	message := fmt.Sprintf("bumping %d repo(s)...", len(repos))
+	if concurrency > 1 {
+		message = fmt.Sprintf("bumping %d repos (%d at a time)...", len(repos), concurrency)
+	}
+	sp := spinner.Start(message)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	for i, repo := range repos {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, repo string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			outputs[i], failed[i] = bumpRepo(repo)
+		}(i, repo)
+	}
+	wg.Wait()
+	sp.Stop()
+
 	failures := 0
-	for _, repo := range repos {
-		fmt.Printf("==> %s\n", repo)
-		sp := spinner.Start("bumping yarn and installing...")
-		result := yarnbump.Bump(repo)
-		sp.Stop()
-		if result.OK {
-			fmt.Printf("    ok: %s\n", result.Message)
-			if gitFlag {
-				gitSp := spinner.Start("committing changes...")
-				commitResult, err := gitops.CommitChanges(repo)
-				gitSp.Stop()
-				switch {
-				case err != nil:
-					fmt.Printf("    git: FAILED: %v\n", err)
-				case commitResult.Committed:
-					fmt.Printf("    git: committed to branch %s\n", commitResult.Branch)
-				default:
-					fmt.Println("    git: nothing to commit")
-				}
-			}
-		} else {
+	for i, out := range outputs {
+		fmt.Print(out)
+		if failed[i] {
 			failures++
-			fmt.Printf("    FAILED: %s\n", result.Message)
 		}
 	}
 
@@ -86,4 +104,34 @@ func runAll() error {
 		return fmt.Errorf("%d repo(s) failed", failures)
 	}
 	return nil
+}
+
+// bumpRepo bumps a single repo's Yarn version, optionally commits the
+// result, and returns its full report and whether it failed. Output is
+// buffered rather than printed directly so concurrent runs don't interleave
+// on stdout.
+func bumpRepo(repo string) (string, bool) {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "==> %s\n", repo)
+
+	result := yarnbump.Bump(repo)
+	if !result.OK {
+		fmt.Fprintf(&buf, "    FAILED: %s\n", result.Message)
+		return buf.String(), true
+	}
+	fmt.Fprintf(&buf, "    ok: %s\n", result.Message)
+
+	if gitFlag {
+		commitResult, err := gitops.CommitChanges(repo)
+		switch {
+		case err != nil:
+			fmt.Fprintf(&buf, "    git: FAILED: %v\n", err)
+		case commitResult.Committed:
+			fmt.Fprintf(&buf, "    git: committed to branch %s\n", commitResult.Branch)
+		default:
+			fmt.Fprintln(&buf, "    git: nothing to commit")
+		}
+	}
+
+	return buf.String(), false
 }
