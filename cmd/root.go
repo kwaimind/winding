@@ -130,13 +130,8 @@ func runAll() error {
 		repos = []string{repo}
 	}
 
-	concurrency := parallelFlag
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	if concurrency > len(repos) {
-		concurrency = len(repos)
-	}
+	concurrency := max(parallelFlag, 1)
+	concurrency = min(concurrency, len(repos))
 
 	outputs := make([]string, len(repos))
 	failed := make([]bool, len(repos))
