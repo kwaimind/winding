@@ -66,8 +66,17 @@ Flags:
 | --- | --- | --- |
 | `--git` | `false` | Commit each bumped repo's changes to a new branch |
 | `--parallel`, `-j` | `4` | Number of repos to bump concurrently |
+| `--repo` | | Only bump this repo (path or directory name) |
 
 When `--git` is set, each repo with pending changes is committed to a new branch named after a short random SHA, with the message `winding: bump yarn to latest`. Repos with no changes, or that aren't git repos, are left alone.
+
+### Bump a single repo
+
+```sh
+winding --repo <name>
+```
+
+`<name>` can be the full tracked path, a directory name, or a fuzzy substring of one — e.g. `winding --repo ssr` matches a tracked `/path/to/apoteket-ssr`. An exact path or directory-name match runs immediately; a fuzzy substring match asks for confirmation first, and an ambiguous substring (matching more than one tracked repo) lists the matches and asks you to be more specific. Combine with `--git` to also commit the change.
 
 ## Configuration
 
