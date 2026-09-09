@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -16,15 +18,27 @@ type Result struct {
 	Committed bool
 }
 
+// yarnPaths are the files a Yarn bump can touch. Only these are inspected
+// and staged, so pre-existing unrelated changes in the working tree are
+// never swept into the bump commit.
+var yarnPaths = []string{"package.json", "yarn.lock", ".yarn", ".yarnrc.yml"}
+
 // CommitChanges creates a new branch named after a short random sha and
-// commits any pending changes in path onto it. If path isn't a git repo or
-// has no pending changes, it returns a zero Result and no error.
+// commits pending Yarn-bump changes (package.json, yarn.lock, .yarn/,
+// .yarnrc.yml) in path onto it. If path isn't a git repo, or the bump left
+// none of those paths changed, it returns a zero Result and no error —
+// even if the working tree has unrelated pending changes.
 func CommitChanges(path string) (Result, error) {
 	if _, err := run(path, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
 		return Result{}, nil
 	}
 
-	status, err := run(path, "git", "status", "--porcelain")
+	paths := existingPaths(path, yarnPaths)
+	if len(paths) == 0 {
+		return Result{}, nil
+	}
+
+	status, err := run(path, "git", append([]string{"status", "--porcelain", "--"}, paths...)...)
 	if err != nil {
 		return Result{}, fmt.Errorf("git status failed: %w", err)
 	}
@@ -41,8 +55,8 @@ func CommitChanges(path string) (Result, error) {
 		return Result{}, fmt.Errorf("git checkout -b %s failed: %w\n%s", branch, err, out)
 	}
 
-	if out, err := run(path, "git", "add", "-A"); err != nil {
-		return Result{}, fmt.Errorf("git add -A failed: %w\n%s", err, out)
+	if out, err := run(path, "git", append([]string{"add", "-A", "--"}, paths...)...); err != nil {
+		return Result{}, fmt.Errorf("git add failed: %w\n%s", err, out)
 	}
 
 	if out, err := run(path, "git", "commit", "-m", "winding: bump yarn to latest"); err != nil {
@@ -50,6 +64,20 @@ func CommitChanges(path string) (Result, error) {
 	}
 
 	return Result{Branch: branch, Committed: true}, nil
+}
+
+// existingPaths returns the subset of candidates (relative to repo) that
+// currently exist on disk. A pathspec git doesn't recognize on disk causes
+// `git add`/`git status` to fail outright, so untouched paths (e.g. no
+// .yarnrc.yml in a non-Berry repo) must be filtered out first.
+func existingPaths(repo string, candidates []string) []string {
+	var found []string
+	for _, c := range candidates {
+		if _, err := os.Stat(filepath.Join(repo, c)); err == nil {
+			found = append(found, c)
+		}
+	}
+	return found
 }
 
 func randomSHA() (string, error) {
